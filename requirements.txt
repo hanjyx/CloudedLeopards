@@ -8,7 +8,6 @@ plotly
 plotly.express
 dash
 dash-bootstrap-components
-dash.dependencies
 datetime
 
 # Deploy
