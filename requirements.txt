@@ -1,0 +1,16 @@
+# Basic
+pandas
+numpy
+# Database
+sqlalchemy
+sqlite3
+# Visualization
+plotly
+plotly.express
+dash
+dash-bootstrap-components
+dash.dependencies
+datetime
+
+# Deploy
+gunicorn
