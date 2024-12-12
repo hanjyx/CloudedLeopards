@@ -3,7 +3,6 @@ pandas
 numpy
 # Database
 sqlalchemy
-sqlite3
 # Visualization
 plotly
 plotly.express
