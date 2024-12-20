@@ -144,7 +144,6 @@ dummy = pd.DataFrame({'x': [0], 'y': [0]})
 # Dash app
 app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
-# For deployment
 server = app.server
 
 app.layout = html.Div(
@@ -345,9 +344,9 @@ app.layout = html.Div(
                         html.Label('Select Seller Age Category:'),
                         dcc.Dropdown(
                             id='seller-age',
-                            options=[{'label': '1 Month', 'value': '1 month'},
-                                     {'label': '2 Months', 'value': '2 months'},
-                                     {'label': '3 Months', 'value': '3 months'}],
+                            options=[{'label': '1 month', 'value': '1 month'},
+                                     {'label': '2 months', 'value': '2 months'},
+                                     {'label': '3 months', 'value': '3 months'}],
                             placeholder="Select Age Category",
                             value='1 month',
                             multi=False
@@ -381,11 +380,11 @@ app.layout = html.Div(
                                 style={'textAlign': 'center', 'fontFamily': 'Arial, sans-serif', 'fontSize': '25px', 'marginBottom': '20px'}),
                         html.Label('Select Seller ID:'),
                         dcc.Dropdown(
-                            id='seller-id',
-                            options=[{'label': seller_id, 'value': seller_id} for seller_id in order_new_seller['seller_id'].unique()],
-                            placeholder="Select Seller ID",
+                            id='dynamic-dropdown',
+                            options=[],
+                            placeholder = "Select Seller ID",
                             multi=True
-                        ),
+                            ),
                         html.Div([
                             dcc.Graph(id='sales-sum-trend'),
                             dcc.Graph(id='sales-count-trend')],
@@ -398,7 +397,7 @@ app.layout = html.Div(
                 )
             ]
         )
-    ]
+    ],
 )
 
 # App Callbacks
@@ -498,7 +497,7 @@ def update_charts(selected_month, selected_segment):
             y='segment_count',
             color='business_segment',
             barmode='group',
-            labels={'month': 'Month', 'segment_count': 'Number of Products Sold', 'business_segment': 'Business Segment'}
+            labels={'month': 'Month', 'segment_count': 'Number of Sellers', 'business_segment': 'Business Segment'}
         )
         bar_fig.update_layout(
             margin=dict(l=5, r=5, t=15, b=1),
@@ -596,24 +595,78 @@ def update_state_info(selected_states):
     
     return html.Ul([html.Li(line) for line in summary_lines])
 
-# App Callback 4
+## App Callback 4
+#Callback 4.1
 @app.callback(
     [Output('sales-sum', 'figure'),
      Output('sales-count', 'figure'),
-     Output('sales-sum-2', 'figure'),
-     Output('sales-count-2', 'figure'),
-     Output('sales-sum-trend', 'figure'),
-     Output('sales-count-trend', 'figure'),
-     #Output('dynamic-dropdown', 'options')
     ],
     [Input('order-month', 'value'),
      Input('seller-age', 'value'),
-     Input('seller-id', 'value'),
-     #Input('dynamic-dropdown', 'value')
     ]
 )
 
-def update_chart(selected_order_month, selected_seller_age, selected_seller_id):
+def update_chart_4_1(selected_order_month, selected_seller_age):
+    
+    #Transform the cut-off month filter
+    selected_order_month = np.datetime64(pd.to_datetime(selected_order_month))
+    
+    #Filter data based on selected month in the dropdown
+    order_new_seller['Seller age as of threshold date'] = (selected_order_month - order_new_seller['won_date']).dt.days
+
+    order_new_seller['age_category'] = order_new_seller['Seller age as of threshold date'].apply(
+        lambda x:
+        "Not joining yet" if x <= 0 else #if the seller joins on the same day with the filter date, we assume there will be no orders yet.
+        "1 month" if x <= 30 else
+        "2 months" if x <= 60 else
+        "3 months" if x <= 90 else
+        "More than 3 months")
+
+    #Pivot for sales amount based on age
+    order_new_seller_sum = pd.pivot_table(
+        order_new_seller[(order_new_seller['trx_happened'] == 'Trx has happened') & (order_new_seller['age_category'] == selected_seller_age)],
+        values='amount',
+        index='seller_id',
+        aggfunc='sum')
+    flat_order_sum = order_new_seller_sum.reset_index()
+
+    #Pivot for number of sales based on age
+    order_new_seller_count = pd.pivot_table(
+        order_new_seller[(order_new_seller['trx_happened'] == 'Trx has happened') & (order_new_seller['age_category'] == selected_seller_age)],
+        values='order_id',
+        index='seller_id',
+        aggfunc='count')
+    flat_order_count = order_new_seller_count.reset_index()
+
+    #Generate the sales-sum and sales-count bar chart
+    if flat_order_sum.empty and flat_order_count.empty:
+        #Using dummy dataframe to show empty chart if the pivot table is empty
+        fig_sum = px.bar(dummy, x= 'x', y= 'y', title= "No Seller Data Available", labels = {"x": "Sales Amount (in Real Brazil)", "y": "Seller ID"})
+        fig_count = px.bar(dummy, x= 'x', y= 'y', title= "No Seller Data Available", labels = {"x": "Number of Orders", "y": "Seller ID"})
+        return fig_sum, fig_count
+    else:
+        #If the pivot table is not empty, then show the graph
+        flat_order_sum = flat_order_sum.sort_values(by = 'amount', ascending = False) #sort by ascending value after making sure that the pivot table is not empty
+        flat_order_count = flat_order_count.sort_values(by = 'order_id', ascending = False) #sort by ascending value after making sure that the pivot table is not empty
+        top10_amount = flat_order_sum.head(10)
+        top10_order = flat_order_count.head(10)
+        fig_sum = px.bar(top10_amount.sort_values(by ='amount', ascending = True), x= 'amount', y= 'seller_id', title="Based on Sales Amount", labels = {"amount": "Sales Amount (in Real Brazil)", "seller_id": "Seller ID"})
+        fig_count = px.bar(top10_order.sort_values(by ='order_id', ascending = True), x= 'order_id', y= 'seller_id', title="Based on Number of Orders", labels = {"order_id": "Number of Orders", "seller_id": "Seller ID"})
+        fig_sum.update_layout(font=dict(size=14))
+        fig_count.update_layout(font=dict(size=14))
+        return fig_sum, fig_count
+
+#Callback 4.2
+@app.callback(
+    [Output('sales-sum-2', 'figure'),
+     Output('sales-count-2', 'figure'),
+    ],
+    [Input('order-month', 'value'),
+     Input('seller-age', 'value'),
+    ]
+)
+
+def update_chart_4_2(selected_order_month, selected_seller_age):
     
     #Transform the cut-off month filter
     selected_order_month = np.datetime64(pd.to_datetime(selected_order_month)) #if selected_order_month else np.datetime64(pd.to_datetime('2018-01-01', format = "%Y-%m-%d"))
@@ -631,7 +684,7 @@ def update_chart(selected_order_month, selected_seller_age, selected_seller_id):
 
     #Pivot for sales amount based on age
     order_new_seller_sum = pd.pivot_table(
-        order_new_seller[order_new_seller['age_category'] == selected_seller_age],
+        order_new_seller[(order_new_seller['trx_happened'] == 'Trx has happened') & (order_new_seller['age_category'] == selected_seller_age)],
         values='amount',
         index='seller_id',
         aggfunc='sum')
@@ -639,41 +692,86 @@ def update_chart(selected_order_month, selected_seller_age, selected_seller_id):
 
     #Pivot for number of sales based on age
     order_new_seller_count = pd.pivot_table(
-        order_new_seller[order_new_seller['age_category'] == selected_seller_age],
+        order_new_seller[(order_new_seller['trx_happened'] == 'Trx has happened') & (order_new_seller['age_category'] == selected_seller_age)],
         values='order_id',
         index='seller_id',
         aggfunc='count')
     flat_order_count = order_new_seller_count.reset_index()
 
+    #Generate the sales-sum and sales-count bar chart
+    if flat_order_sum.empty and flat_order_count.empty:
+        #Using dummy dataframe to show empty chart if the pivot table is empty
+        fig_sum_2 = px.bar(dummy, x= 'x', y= 'y', title= "No Seller Data Available", labels = {"x": "Sales Amount (in Real Brazil)", "y": "Seller ID"})
+        fig_count_2 = px.bar(dummy, x= 'x', y= 'y', title= "No Seller Data Available", labels = {"x": "Number of Orders", "y": "Seller ID"})
+        return fig_sum_2, fig_count_2
+    else:
+        #If the pivot table is not empty, then show the graph
+        flat_order_sum_2 = flat_order_sum.sort_values(by = 'amount', ascending = True) #sort by ascending value after making sure that the pivot table is not empty
+        flat_order_count_2 = flat_order_count.sort_values(by = 'order_id', ascending = True) #sort by ascending value after making sure that the pivot table is not empty
+        lowest10_amount = flat_order_sum_2.head(10)
+        lowest10_order = flat_order_count_2.head(10)
+        fig_sum_2 = px.bar(lowest10_amount.sort_values(by ='amount', ascending = False), x= 'amount', y= 'seller_id', title="Based on Sales Amount", labels = {"amount": "Sales Amount (in Real Brazil)", "seller_id": "Seller ID"})
+        fig_count_2 = px.bar(lowest10_order.sort_values(by ='order_id', ascending = False), x= 'order_id', y= 'seller_id', title="Based on Number of Orders", labels = {"order_id": "Number of Orders", "seller_id": "Seller ID"})
+        fig_sum_2.update_layout(font=dict(size=14))
+        fig_count_2.update_layout(font=dict(size=14))
+        return fig_sum_2, fig_count_2
+
+#Callback 4.3
+@app.callback(
+    [Output('sales-sum-trend', 'figure'),
+     Output('sales-count-trend', 'figure'),
+     Output('dynamic-dropdown', 'options')
+    ],
+    [Input('order-month', 'value'),
+     Input('seller-age', 'value'),
+     #Input('seller-id', 'value'),
+     Input('dynamic-dropdown', 'value')
+    ]
+)
+
+def update_chart_4_3(selected_order_month, selected_seller_age, selected_seller_id):
+    
+    #Transform the cut-off month filter
+    selected_order_month = np.datetime64(pd.to_datetime(selected_order_month)) #if selected_order_month else np.datetime64(pd.to_datetime('2018-01-01', format = "%Y-%m-%d"))
+    
+    #Filter data based on selected month in the dropdown
+    order_new_seller['Seller age as of threshold date'] = (selected_order_month - order_new_seller['won_date']).dt.days
+
+    order_new_seller['age_category'] = order_new_seller['Seller age as of threshold date'].apply(
+        lambda x:
+        "Not joining yet" if x <= 0 else #if the seller joins on the same day with the filter date, we assume there will be no orders yet.
+        "1 month" if x <= 30 else
+        "2 months" if x <= 60 else
+        "3 months" if x <= 90 else
+        "More than 3 months")
+
     #Filter new_seller_growth_amount to include only selected seller id
     new_seller_growth_amount = pd.pivot_table(
-        data=order_new_seller[(order_new_seller['trx_happened'] == 'Trx has happened') & (order_new_seller['age_category'] == filter_age_category)],
+        data=order_new_seller[(order_new_seller['trx_happened'] == 'Trx has happened') & (order_new_seller['age_category'] == selected_seller_age)],
         values='amount',        
         index=['seller_id', 'transaction_age_mark'],       
         aggfunc='sum').fillna(0)
     
     new_seller_growth_amount = new_seller_growth_amount.reset_index()
     new_seller_growth_amount = new_seller_growth_amount.sort_values(by = 'transaction_age_mark', ascending = True)
+    new_seller_growth_amount = new_seller_growth_amount.drop(new_seller_growth_amount[new_seller_growth_amount['transaction_age_mark'] == 'Old seller'].index)
     filtered_new_seller_growth_amount = new_seller_growth_amount[new_seller_growth_amount['seller_id'].isin(selected_seller_id)] if selected_seller_id else new_seller_growth_amount
 
     #Filter new_seller_growth_count to include only selected seller id
     new_seller_growth_count = pd.pivot_table(
-        data=order_new_seller[(order_new_seller['trx_happened'] == 'Trx has happened') & (order_new_seller['age_category'] == filter_age_category)],
-        values='order_id',        
+        data=order_new_seller[(order_new_seller['trx_happened'] == 'Trx has happened') & (order_new_seller['age_category'] == selected_seller_age)],
+        values='order_id',
         index=['seller_id', 'transaction_age_mark'],       
         aggfunc='count').fillna(0)
 
-    new_seller_growth_count = new_seller_growth_count.reset_index()
+    new_seller_growth_count = new_seller_growth_count.reset_index()    
     new_seller_growth_count = new_seller_growth_count.sort_values(by = 'transaction_age_mark', ascending = True)
+    new_seller_growth_count = new_seller_growth_count.drop(new_seller_growth_count[new_seller_growth_count['transaction_age_mark'] == 'Old seller'].index)
+    unique_seller_id = new_seller_growth_count['seller_id'].unique()
     filtered_new_seller_growth_count = new_seller_growth_count[new_seller_growth_count['seller_id'].isin(selected_seller_id)] if selected_seller_id else new_seller_growth_count
 
     #Generate the sales-sum and sales-count bar chart
-    if flat_order_sum.empty and flat_order_count.empty:
-        #Using dummy dataframe to show empty chart if the pivot table is empty
-        fig_sum = px.bar(dummy, x= 'x', y= 'y', title= "No Seller Data Available", labels = {"x": "Sales Amount (in Real Brazil)", "y": "Seller ID"})
-        fig_count = px.bar(dummy, x= 'x', y= 'y', title= "No Seller Data Available", labels = {"x": "Number of Orders", "y": "Seller ID"})
-        fig_sum_2 = px.bar(dummy, x= 'x', y= 'y', title= "No Seller Data Available", labels = {"x": "Sales Amount (in Real Brazil)", "y": "Seller ID"})
-        fig_count_2 = px.bar(dummy, x= 'x', y= 'y', title= "No Seller Data Available", labels = {"x": "Number of Orders", "y": "Seller ID"})
+    if filtered_new_seller_growth_amount.empty and filtered_new_seller_growth_count.empty:
         fig_trend_amount = px.line(dummy,
                                    x = "x",
                                    y = "y",
@@ -686,27 +784,10 @@ def update_chart(selected_order_month, selected_seller_age, selected_seller_id):
                                    title = "No Data Available",
                                    labels = {"x": "Month Age of Seller", "y": "Number of Orders"},
                                    markers = True)
-        return fig_sum, fig_count, fig_sum_2, fig_count_2, fig_trend_amount, fig_trend_count
+        options = [{'label': '0', 'value': '0'}]
+        return fig_trend_amount, fig_trend_count, options
     else:
-        #If the pivot table is not empty, then show the graph
-        flat_order_sum = flat_order_sum.sort_values(by = 'amount', ascending = False) #sort by ascending value after making sure that the pivot table is not empty
-        flat_order_count = flat_order_count.sort_values(by = 'order_id', ascending = False) #sort by ascending value after making sure that the pivot table is not empty
-        top10_amount = flat_order_sum.head(10)
-        top10_order = flat_order_count.head(10)
-        fig_sum = px.bar(top10_amount.sort_values(by ='amount', ascending = True), x= 'amount', y= 'seller_id', title="Based on Sales Amount", labels = {"amount": "Sales Amount (in Real Brazil)", "seller_id": "Seller ID"})
-        fig_count = px.bar(top10_order.sort_values(by ='order_id', ascending = True), x= 'order_id', y= 'seller_id', title="Based on Number of Orders", labels = {"order_id": "Number of Orders", "seller_id": "Seller ID"})
-        fig_sum.update_layout(font=dict(size=14))
-        fig_count.update_layout(font=dict(size=14))
-        
-        flat_order_sum_2 = flat_order_sum.sort_values(by = 'amount', ascending = True) #sort by ascending value after making sure that the pivot table is not empty
-        flat_order_count_2 = flat_order_count.sort_values(by = 'order_id', ascending = True) #sort by ascending value after making sure that the pivot table is not empty
-        lowest10_amount = flat_order_sum_2.head(10)
-        lowest10_order = flat_order_count_2.head(10)
-        fig_sum_2 = px.bar(lowest10_amount.sort_values(by ='amount', ascending = False), x= 'amount', y= 'seller_id', title="Based on Sales Amount", labels = {"amount": "Sales Amount (in Real Brazil)", "seller_id": "Seller ID"})
-        fig_count_2 = px.bar(lowest10_order.sort_values(by ='order_id', ascending = False), x= 'order_id', y= 'seller_id', title="Based on Number of Orders", labels = {"order_id": "Number of Orders", "seller_id": "Seller ID"})
-        fig_sum_2.update_layout(font=dict(size=14))
-        fig_count_2.update_layout(font=dict(size=14))
-        
+        #If the pivot table is not empty, then show the graph       
         fig_trend_amount = px.line(filtered_new_seller_growth_amount,
                                    x = "transaction_age_mark",
                                    y = "amount",
@@ -722,7 +803,8 @@ def update_chart(selected_order_month, selected_seller_age, selected_seller_id):
                                   title = "Trend of Number of Orders",
                                   labels = {"order_id": "Number of Orders", "transaction_age_mark": "Month Age of Seller"},
                                   markers = True)
-        return fig_sum, fig_count, fig_sum_2, fig_count_2,fig_trend_amount, fig_trend_count
+        options =  [{'label': seller, 'value': seller} for seller in unique_seller_id]
+        return fig_trend_amount, fig_trend_count, options
     
 
 # Run the application
